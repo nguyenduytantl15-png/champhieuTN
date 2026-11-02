@@ -966,6 +966,9 @@ const OMR = (() => {
   function detect1(G, opt, relax) {
     opt = {...opt, relax}; const cands = prep(G, relax);
     if (cands.length < 4) return {ok:false, reason:'Không thấy đủ các ô vuông đen định vị', cands};
+    if (opt.compact && !opt.mini) { // thử ngay mẫu vùng tô đang dùng: khớp chắc chắn thì trả kết quả luôn (nhanh hơn, nhất là trên điện thoại)
+      const [a1,a2,a3,a4,a5,idp,a7] = opt.compact, T0 = compact(a1,a2,a3,a4,a5,idp === 'room' ? 'room' : !!idp,a7);
+      if (T0.blockList.length) { var F0 = cropFrame(T0.blockList, T0), d0 = detectFrame(G, cands, F0, {...opt, trip: triplets(cands)}); if (d0.ok && d0.fit >= 40 && !d0.missCells) return d0; } }
     let det = detectFrame(G, cands, FULL, opt);
     if (det.ok) return det;
     const frames = [], alt = []; let pri = null, K0 = 0;
@@ -973,19 +976,21 @@ const OMR = (() => {
       const [a1,a2,a3,a4,a5,idp,a7] = opt.compact;
       pri = idp === 'room' ? 'room' : !!idp; K0 = (a5||[]).length >= 2 ? Math.min(4, a5.length) : 0; const fake = k => k ? Array.from({length:k}, (_, i) => a5[i] ?? String(i+1).padStart(2,'0')) : [];
       // dự phòng: phiếu in theo cài đặt khác (ô nhận tên khác, số ô mã đề khác) — xếp theo khả năng gặp
-      const vs = [[pri, K0], ...[true, 'room', false].filter(v => v !== pri).map(v => [v, K0]), ...[0,2,3,4].filter(k => k !== K0).flatMap(k => [pri, ...[true, 'room', false].filter(v => v !== pri)].map(v => [v, k]))];
-      const seen = new Set(); vs.forEach(([v,k],i) => { const Tc = compact(a1,a2,a3,a4,fake(k),v,a7); if (!Tc.blockList.length || seen.has(Tc)) return; seen.add(Tc); (i ? alt : frames).push(cropFrame(Tc.blockList, Tc)); }); }
+      const others = [false, true, 'room'].filter(v => v !== pri); // phiếu không có ô nhận tên (in bản cũ) hay gặp nhất
+      const vs = [[pri, K0], ...others.map(v => [v, K0]), ...[0,2,3,4].filter(k => k !== K0).flatMap(k => [pri, ...others].map(v => [v, k]))];
+      const seen = new Set(); vs.forEach(([v,k],i) => { const Tc = compact(a1,a2,a3,a4,fake(k),v,a7); if (!Tc.blockList.length || seen.has(Tc)) return; seen.add(Tc); (i ? alt : frames).push(i === 0 && typeof F0 !== 'undefined' && F0 && F0.T === Tc ? F0 : cropFrame(Tc.blockList, Tc)); }); }
     if (opt.mini) { const [m1,m2,m3,mi] = opt.mini; [!!mi, !mi].forEach((v,i) => { const Tm = mini(m1,m2,m3,v); if (Tm.blockList.length) (i ? alt : frames).push(cropFrame(Tm.blockList, Tm)); }); }
-    if (!opt.primaryOnly) for (const bl of opt.crops || []) frames.push(cropFrame(bl));
+    const cropsF = []; if (!opt.primaryOnly) for (const bl of opt.crops || []) (opt.compact ? cropsF : frames).push(cropFrame(bl)); // phần cắt từ phiếu A4: thử sau các kiểu vùng tô gọn
     if (frames.length) { // thử mọi kiểu vùng tô, chọn kiểu khớp viền ô tròn tốt nhất
       const trip = triplets(cands); let bestD = null;
-      for (const group of opt.primaryOnly ? [frames] : [frames, alt]) { const pri = bestD; // mẫu dự phòng (in theo cài đặt khác) phải khớp hơn hẳn mới thay mẫu đang chọn
+      for (const group of opt.primaryOnly ? [frames] : [frames, alt, cropsF]) { const pri = bestD; // mẫu dự phòng (in theo cài đặt khác) phải khớp hơn hẳn mới thay mẫu đang chọn
         const altDl = group === alt && !opt.deadline ? performance.now() + 3000 : 0;
-        for (const F of group) { if (altDl && performance.now() > altDl) break; const d2 = detectFrame(G, cands, F, {...opt, trip, deadline: opt.deadline || altDl}); const sameG = (a, c) => a.corners.every((p,i) => Math.hypot(p[0]-c.corners[i][0], p[1]-c.corners[i][1]) < 0.02*Math.hypot(G.w, G.h));
+        for (const F of group) { if (altDl && performance.now() > altDl) break; const d2 = typeof F0 !== 'undefined' && F === F0 && d0 ? d0 : detectFrame(G, cands, F, {...opt, trip, deadline: opt.deadline || altDl}); const sameG = (a, c) => a.corners.every((p,i) => Math.hypot(p[0]-c.corners[i][0], p[1]-c.corners[i][1]) < 0.02*Math.hypot(G.w, G.h));
           // cùng vị trí mốc (chỉ khác ô mã đề / ô nhận tên): ưu tiên mẫu đúng số mã đề đang dùng, rồi đúng kiểu ô nhận tên; ngang nhau mới so độ khớp
           const pref = t => t && t.name === 'compact' ? ((t.codes||[]).length === K0 ? 2 : 0) + (t.idp === pri ? 1 : 0) : 0;
           if (d2.ok && bestD && sameG(d2, bestD)) { const a = pref(d2.T), c = pref(bestD.T); if (a > c || (a === c && d2.fit > 1.15 * bestD.fit)) bestD = d2; continue; }
-          if (group === alt && pri && d2.ok && !(d2.fit > 1.6 * pri.fit)) continue; if (opt.debug) console.log('FRAME', F.name, d2.ok, d2.nmk, d2.fit && Math.round(d2.fit)); if (opt.debug && !d2.ok && d2.best0) console.log("FRAME", F.name, "fail-best-fit", Math.round(d2.best0)); if (d2.ok && (!bestD || betterDet(d2, bestD))) bestD = d2; }
+          if (group === alt && pri && d2.ok && !(d2.fit > 1.6 * pri.fit)) continue; if (opt.debug) console.log('FRAME', F.name, d2.ok, d2.nmk, d2.fit && Math.round(d2.fit)); if (opt.debug && !d2.ok && d2.best0) console.log("FRAME", F.name, "fail-best-fit", Math.round(d2.best0)); if (d2.ok && (!bestD || betterDet(d2, bestD))) bestD = d2;
+          if (d2.ok && bestD === d2 && d2.fit >= 40 && !d2.missCells && F.T && F.T.name === 'compact') break; } // mẫu đang dùng khớp đủ mốc + rõ nét: khỏi thử các kiểu cắt khác
         if (bestD && bestD.fit >= 25) break; } // khớp chắc chắn thì khỏi thử mẫu dự phòng
       if (bestD) { if (bestD.T === TFULL && !bestD.blocks.includes('sbd')) { const up = upgradeFull(G, cands, bestD, opt); if (up) return up; } return bestD; } }
     return det;
@@ -1059,12 +1064,14 @@ const OMR = (() => {
         const nb = Object.keys(m).length, key = cornerKey.map(k2 => m[k2] ? m[k2].id : '-').join() + '|' + nb;
         if (nb < Math.max(5, marks.length - Math.ceil(marks.length/4)) || seen.has(key)) return; seen.add(key);
         const img = cornerKey.map(k2 => { if (m[k2]) return m[k2]; const e = marks.find(x => x.key===k2), q = ap(H,e.x,e.y); return {cx:q[0], cy:q[1], side:e.s*scaleAt(H,e.x,e.y), virt:true}; });
-        hyps.push({score: nb, nb: nb - 4, m, H, img, up: 1, fit: bubbleFit(G, H, F.blocks, F.T, opt.act)});
+        const hy = {score: nb, nb: nb - 4, m, H, img, up: 1, fit: bubbleFit(G, H, F.blocks, F.T, opt.act)}; hyps.push(hy);
+        if (nb >= marks.length && hy.fit >= 40) done = true; // đã khớp đủ mọi mốc và rõ nét → dừng tìm thêm
       };
+      let done = false;
       // (1) cặp hàng mốc: hai bộ ba gần song song → dựng thẳng phép phối cảnh (chịu chụp xiên mạnh)
       const rowKeys = rows.map(([x0,y,x1]) => marks.filter(e => Math.abs(e.y - y) < 0.01 && e.x >= x0 - 0.01 && e.x <= x1 + 0.01).sort((a,b) => a.x - b.x)).filter(r => r.length === 3);
       const TOP = opt.trip.slice(0, opt.live ? 60 : 120);
-      for (let i=0;i<TOP.length;i++) { if (opt.deadline && (i & 7) === 0 && performance.now() > opt.deadline) break; for (let j=0;j<TOP.length;j++) { if (i === j) continue;
+      for (let i=0;i<TOP.length && !done;i++) { if (opt.deadline && (i & 7) === 0 && performance.now() > opt.deadline) break; for (let j=0;j<TOP.length;j++) { if (i === j) continue;
         const A = TOP[i], B = TOP[j], rl = B.len/A.len; if (rl < 0.55 || rl > 1.8) continue;
         const cosT = (A.dx*B.dx + A.dy*B.dy) / (A.len*B.len); if (Math.abs(cosT) < 0.85) continue;
         const shared = [A.a,A.b,A.m].some(c => c === B.a || c === B.b || c === B.m); if (shared) continue;
@@ -1081,7 +1088,7 @@ const OMR = (() => {
           } } } }
       // (2) một hàng mốc rồi mở rộng dần (khi hàng kia bị mất / mờ)
       let tick = 0;
-      for (const A of opt.trip) for (const [x0,y,x1] of rows) for (const dir of [0,1]) { if (opt.deadline && (++tick & 31) === 0 && performance.now() > opt.deadline) break;
+      for (const A of done ? [] : opt.trip) for (const [x0,y,x1] of rows) for (const dir of [0,1]) { if (done || (opt.deadline && (++tick & 31) === 0 && performance.now() > opt.deadline)) break;
         const pa = dir ? A.b : A.a, pb = dir ? A.a : A.b;
         // phép đồng dạng: (x0,y)→pa, (x1,y)→pb, trục y của mẫu vuông góc (không lật gương)
         const k = 1/(x1-x0), ux = (pb.cx-pa.cx)*k, uy = (pb.cy-pa.cy)*k;
@@ -1971,8 +1978,8 @@ async function makeEvidence(det, bub, w, h){
   return {ev, evb, evh, evt: Date.now()};
 }
 async function gradeSource(src, sw, sh, name){
-  let {G, w, h} = rasterize(src, sw, sh, 2000);
-  let det = OMR.detect(G, scanOpts());
+  let {G, w, h} = rasterize(src, sw, sh, PAIR ? 1600 : 2000); // điện thoại: ảnh đã nét, 1600 px là đủ và nhanh hơn ~1,5 lần
+  let det = OMR.detect(G, PAIR ? {...scanOpts(), budget: 1500} : scanOpts());
   if (!det.ok && Math.max(sw, sh) > 1000) { // ảnh rất mờ: thu nhỏ lại thì mốc gọn hơn, thử thêm một lần
     const R = rasterize(src, sw, sh, Math.max(900, Math.min(1100, Math.round(Math.max(sw, sh)*0.7)))), d2 = OMR.detect(R.G, {...scanOpts(), budget: 2500}); if (d2.ok) { ({G, w, h} = R); det = d2; } }
   const res = {id:++rid, name, ok:det.ok, reason:det.reason};
@@ -2329,7 +2336,7 @@ async function snap(){
   busy = true; $('#camstat').textContent = 'Đang chấm…';
   try {
     let src = null, sw = v.videoWidth, sh = v.videoHeight;
-    if (PAIR && window.ImageCapture && stream) { // điện thoại: chụp ảnh tĩnh độ phân giải đầy đủ (nét hơn khung hình video)
+    if (PAIR && window.ImageCapture && stream && v.videoWidth < 1280) { // điện thoại: chụp ảnh tĩnh độ phân giải đầy đủ (nét hơn khung hình video)
       try { const bm = await createImageBitmap(await new ImageCapture(stream.getVideoTracks()[0]).takePhoto()); src = bm; sw = bm.width; sh = bm.height; } catch {} }
     if (!src) src = await avgFrames(v, 4);
     const r = await gradeSource(src, sw, sh, 'Camera ' + new Date().toLocaleTimeString('vi-VN'));
