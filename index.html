@@ -48,6 +48,11 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .muted{color:var(--muted)} .small{font-size:12.5px}
 table{border-collapse:collapse;width:100%}
+#r-wrap{max-height:62vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
+#results th{position:sticky;top:0;background:var(--panel);z-index:1;box-shadow:0 1px 0 var(--line)}
+#results td,#results th{padding:4px 8px;font-size:13px}
+#results .badge{padding:1px 7px;font-size:11.5px}
+#results tr.cur td{background:var(--info-bg)}
 th,td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
 th{font-size:12px;color:var(--muted);font-weight:650;white-space:nowrap}
 .keys td input{width:100%}
@@ -365,7 +370,7 @@ body:not(.has-pm) .pmc{display:none!important}
         <div class="row" style="justify-content:space-between;margin-bottom:8px">
           <div class="kpi" id="kpi"></div>
           <div class="row">
-            <select id="r-sort" title="Sắp xếp bảng"><option value="scan">Thứ tự chấm</option><option value="list">Theo danh sách lớp</option><option value="sbd">Theo SBD</option></select>
+            <select id="r-sort" title="Sắp xếp bảng"><option value="scan">Thứ tự chấm</option><option value="new">Mới nhất trước</option><option value="list">Theo danh sách lớp</option><option value="sbd">Theo SBD</option></select>
             <button class="btn sm" id="r-copy" title="Chép bảng điểm để dán vào Excel / sổ điểm">Sao chép điểm</button>
             <button class="btn sm" id="r-next">Phiếu cần xem lại →</button>
             <button class="btn sm pri" id="r-xlsx">Xuất Excel</button>
@@ -374,7 +379,8 @@ body:not(.has-pm) .pmc{display:none!important}
           </div>
         </div>
         <div class="row small muted" id="r-store" style="margin:-2px 0 8px;gap:8px"></div>
-        <div class="scroll"><table id="results">
+        <div class="row" id="r-filter" style="margin:0 0 8px;gap:6px"></div>
+        <div class="scroll" id="r-wrap"><table id="results">
           <thead><tr><th>#</th><th>SBD</th><th>Họ tên</th><th>Mã đề</th><th class="num">P.I</th><th class="num pmc">Ghép</th><th class="num">P.II</th><th class="num">P.III</th><th class="num">Tổng</th><th>Trạng thái</th></tr></thead>
           <tbody></tbody>
         </table></div>
@@ -960,10 +966,10 @@ const OMR = (() => {
     if (cands.length < 4) return {ok:false, reason:'Không thấy đủ các ô vuông đen định vị', cands};
     let det = detectFrame(G, cands, FULL, opt);
     if (det.ok) return det;
-    const frames = [], alt = [];
+    const frames = [], alt = []; let pri = null, K0 = 0;
     if (opt.compact) { // mẫu đang chọn trước, mẫu còn lại (in từ bản cũ) để dự phòng
       const [a1,a2,a3,a4,a5,idp,a7] = opt.compact;
-      const pri = idp === 'room' ? 'room' : !!idp, K0 = (a5||[]).length >= 2 ? Math.min(4, a5.length) : 0, fake = k => k ? Array.from({length:k}, (_, i) => a5[i] ?? String(i+1).padStart(2,'0')) : [];
+      pri = idp === 'room' ? 'room' : !!idp; K0 = (a5||[]).length >= 2 ? Math.min(4, a5.length) : 0; const fake = k => k ? Array.from({length:k}, (_, i) => a5[i] ?? String(i+1).padStart(2,'0')) : [];
       // dự phòng: phiếu in theo cài đặt khác (ô nhận tên khác, số ô mã đề khác) — xếp theo khả năng gặp
       const vs = [[pri, K0], ...[true, 'room', false].filter(v => v !== pri).map(v => [v, K0]), ...[0,2,3,4].filter(k => k !== K0).flatMap(k => [pri, ...[true, 'room', false].filter(v => v !== pri)].map(v => [v, k]))];
       const seen = new Set(); vs.forEach(([v,k],i) => { const Tc = compact(a1,a2,a3,a4,fake(k),v,a7); if (!Tc.blockList.length || seen.has(Tc)) return; seen.add(Tc); (i ? alt : frames).push(cropFrame(Tc.blockList, Tc)); }); }
@@ -974,7 +980,9 @@ const OMR = (() => {
       for (const group of opt.primaryOnly ? [frames] : [frames, alt]) { const pri = bestD; // mẫu dự phòng (in theo cài đặt khác) phải khớp hơn hẳn mới thay mẫu đang chọn
         const altDl = group === alt && !opt.deadline ? performance.now() + 3000 : 0;
         for (const F of group) { if (altDl && performance.now() > altDl) break; const d2 = detectFrame(G, cands, F, {...opt, trip, deadline: opt.deadline || altDl}); const sameG = (a, c) => a.corners.every((p,i) => Math.hypot(p[0]-c.corners[i][0], p[1]-c.corners[i][1]) < 0.02*Math.hypot(G.w, G.h));
-          if (d2.ok && bestD && sameG(d2, bestD)) { if (d2.fit > 1.15 * bestD.fit) bestD = d2; continue; } // cùng vị trí mốc (chỉ khác ô mã đề / ô nhận tên): giữ mẫu ưu tiên trừ khi khớp hơn rõ
+          // cùng vị trí mốc (chỉ khác ô mã đề / ô nhận tên): ưu tiên mẫu đúng số mã đề đang dùng, rồi đúng kiểu ô nhận tên; ngang nhau mới so độ khớp
+          const pref = t => t && t.name === 'compact' ? ((t.codes||[]).length === K0 ? 2 : 0) + (t.idp === pri ? 1 : 0) : 0;
+          if (d2.ok && bestD && sameG(d2, bestD)) { const a = pref(d2.T), c = pref(bestD.T); if (a > c || (a === c && d2.fit > 1.15 * bestD.fit)) bestD = d2; continue; }
           if (group === alt && pri && d2.ok && !(d2.fit > 1.6 * pri.fit)) continue; if (opt.debug) console.log('FRAME', F.name, d2.ok, d2.nmk, d2.fit && Math.round(d2.fit)); if (opt.debug && !d2.ok && d2.best0) console.log("FRAME", F.name, "fail-best-fit", Math.round(d2.best0)); if (d2.ok && (!bestD || betterDet(d2, bestD))) bestD = d2; }
         if (bestD && bestD.fit >= 25) break; } // khớp chắc chắn thì khỏi thử mẫu dự phòng
       if (bestD) { if (bestD.T === TFULL && !bestD.blocks.includes('sbd')) { const up = upgradeFull(G, cands, bestD, opt); if (up) return up; } return bestD; } }
@@ -1213,7 +1221,7 @@ const OMR = (() => {
       const {b, at, sx, sy} = o, con = ref[BK(b)].contrast;
       const rv = []; for (const rad of [b.r+0.55, b.r+0.95]) for (let k=0;k<NA;k++) rv.push(at(sx+rad*CS_[k], sy+rad*SN_[k]));
       rv.sort((a,b)=>a-b); const wl = Math.max(1, rv[Math.floor(rv.length*0.7)]);
-      const rr = 0.58*b.r; let sum=0, n=0;
+      const rr = 0.7*b.r; let sum=0, n=0;
       for (let i=-4;i<=4;i++) for (let j=-4;j<=4;j++) { if (i*i+j*j>16) continue;
         const v = at(sx + i*rr/4, sy + j*rr/4);
         sum += Math.min(1, Math.max(0, (1 - v/wl)/con)); n++; }
@@ -1247,6 +1255,9 @@ const OMR = (() => {
   function decide(scores) {
     scores = calibrate(scores);
     const marked = new Array(scores.length).fill(false), unsure = new Array(scores.length).fill(false);
+    // mức nhiễu của ô trống theo từng khối: nhóm có 1 ô nổi hẳn so với nhiễu thì vẫn nhận (tô nhạt / tô vòng quanh chữ)
+    const rest = {}; for (const [, idx] of GROUPS) { const v = idx.map(i => scores[i] || 0).sort((a,b) => b-a); if (v[0] <= 0.02) continue; const bk = LAYOUT[idx[0]].blk; (rest[bk] ||= []).push(...v.slice(1)); }
+    const NZ = {}; for (const k in rest) { const a = rest[k].sort((x,y) => x-y); NZ[k] = a[Math.floor(a.length*0.95)] || 0; }
     for (const [, idx] of GROUPS) {
       const s = idx.map(i => scores[i]);
       const ord = s.map((v,k)=>k).sort((a,b)=>s[b]-s[a]);
@@ -1255,6 +1266,8 @@ const OMR = (() => {
       // 2 ô trên ngưỡng nhưng 1 ô đậm hẳn → ô kia có thể là vết tẩy
       if (hits.length > 1 && s1 - s2 > 0.3 && s2 < 0.55) { hits = [ord[0]]; unsure[idx[ord[1]]] = true; }
       if (!hits.length && s1 >= T_LO && s1 - s2 >= 0.15) { hits = [ord[0]]; unsure[idx[ord[0]]] = true; }
+      const nz = NZ[LAYOUT[idx[0]].blk] ?? 1;
+      if (!hits.length && s1 >= Math.max(0.16, nz + 0.1) && s1 - s2 >= 0.15 && s1 >= 2.5*s2) { hits = [ord[0]]; unsure[idx[ord[0]]] = true; }
       hits.forEach(k => marked[idx[k]] = true);
       s.forEach((v,k) => { if (v >= T_FLAG && v < T_HI + 0.05 && !(hits.length===1 && hits[0]===k && v>=T_HI)) unsure[idx[k]] = true; });
     }
@@ -2011,14 +2024,17 @@ document.addEventListener('paste', e => { const f=[...(e.clipboardData?.files||[
 // ---------- bảng kết quả ----------
 const STATUS = {ok:['b-ok','Đạt'], warn:['b-warn','Xem lại'], err:['b-err','Lỗi'], edit:['b-info','Đã sửa']};
 let sortMode = store.get('omr.sort', 'scan');
+let resFilter = 'all';
+const resMatch = r => resFilter === 'all' || (resFilter === 'warn' ? r.status === 'warn' : resFilter === 'err' ? r.status === 'err' : r.status === 'ok' || r.status === 'edit');
 function resultView(){
-  const sm = studentMap(), rows = results.map((r,i) => ({r, i}));
+  const sm = studentMap(), rows = results.map((r,i) => ({r, i})).filter(x => resMatch(x.r));
+  if (sortMode === 'new') return rows.reverse();
   if (sortMode === 'sbd') return rows.sort((a,b) => (+normSbd(a.r.dec?.sbd||'')||1e12) - (+normSbd(b.r.dec?.sbd||'')||1e12) || a.i-b.i);
   if (sortMode === 'list' && sm.size) {
     const out = [], used = new Set();
     for (const [sbd, st] of sm) {
       const hit = rows.filter(x => x.r.ok && normSbd(x.r.dec.sbd) === sbd);
-      if (hit.length) hit.forEach(x => { out.push(x); used.add(x.i); }); else out.push({missing:true, sbd:st.sbdRaw||sbd, st});
+      if (hit.length) hit.forEach(x => { out.push(x); used.add(x.i); }); else if (resFilter === 'all') out.push({missing:true, sbd:st.sbdRaw||sbd, st});
     }
     rows.forEach(x => { if (!used.has(x.i)) out.push(x); });
     return out;
@@ -2036,12 +2052,24 @@ function renderResults(){
     const sc = r.sc||{}, st2 = r.ok && r.dec.sbd && seen.get(r.dec.sbd)>1 ? ' <span class="badge b-warn">Trùng SBD</span>' : '';
     const stu = r.ok ? sm.get(normSbd(r.dec.sbd)) : null;
     tr.innerHTML = r.ok
-      ? `<td>${k+1}</td><td><b>${escH(r.dec.sbd||'—')}</b></td><td>${escH(stu?.name || (r.dec.noName ? 'Không tên' : r.dec.idText ? 'Lớp ' + r.dec.idText : ''))}</td><td>${escH(r.dec.made||'—')}</td><td class="num">${fmt(sc.s1)}</td><td class="num pmc">${fmt(sc.s4)}</td><td class="num">${fmt(sc.s2)}</td><td class="num">${fmt(sc.s3)}</td><td class="num"><b>${fmt(sc.total)}</b></td><td><span class="badge ${st[0]}">${st[1]}</span>${PAIR ? (r.sent ? ' <span class="badge b-ok">✓ đã gửi</span>' : ' <span class="badge b-info">đang gửi…</span>') : r.remote ? ' 📱' : ''}${st2}</td>`
-      : `<td>${k+1}</td><td colspan="7" class="muted">${escH(r.name)} — ${escH(r.reason||'Lỗi')}</td><td><span class="badge b-err">Lỗi</span></td>`;
+      ? `<td>${i+1}</td><td><b>${escH(r.dec.sbd||'—')}</b></td><td>${escH(stu?.name || (r.dec.noName ? 'Không tên' : r.dec.idText ? 'Lớp ' + r.dec.idText : ''))}</td><td>${escH(r.dec.made||'—')}</td><td class="num">${fmt(sc.s1)}</td><td class="num pmc">${fmt(sc.s4)}</td><td class="num">${fmt(sc.s2)}</td><td class="num">${fmt(sc.s3)}</td><td class="num"><b>${fmt(sc.total)}</b></td><td><span class="badge ${st[0]}">${st[1]}</span>${PAIR ? (r.sent ? ' <span class="badge b-ok">✓ đã gửi</span>' : ' <span class="badge b-info">đang gửi…</span>') : r.remote ? ' 📱' : ''}${st2}</td>`
+      : `<td>${i+1}</td><td colspan="7" class="muted">${escH(r.name)} — ${escH(r.reason||'Lỗi')}</td><td><span class="badge b-err">Lỗi</span></td>`;
+    if (r.id === lastId) tr.className = 'cur';
     tr.onclick = () => openReview(i);
     tb.appendChild(tr);
   });
   $('#r-empty').style.display = results.length ? 'none' : 'block';
+  { // lọc nhanh: chỉ xem phiếu cần xem lại / lỗi; xoá gọn các phiếu lỗi
+    const cnt = {all: results.length, warn: results.filter(r => r.status === 'warn').length, err: results.filter(r => r.status === 'err').length};
+    cnt.ok = cnt.all - cnt.warn - cnt.err;
+    const F = [['all','Tất cả'],['warn','Cần xem lại'],['err','Lỗi'],['ok','Đạt / đã sửa']];
+    $('#r-filter').innerHTML = results.length ? F.map(([k,t]) => `<button class="chip ${resFilter===k?'on':''}" data-f="${k}" ${k !== 'all' && !cnt[k] ? 'disabled style="opacity:.45"' : ''}>${t} <span class="muted">${cnt[k]}</span></button>`).join('')
+      + (cnt.err ? ` <button class="btn sm" id="r-delerr" style="margin-left:auto">Xoá ${cnt.err} phiếu lỗi</button>` : '') : '';
+    $$('#r-filter .chip').forEach(b => b.onclick = () => { resFilter = b.dataset.f; renderResults(); });
+    const de = $('#r-delerr'); if (de) de.onclick = () => { if (!de.dataset.arm) { de.dataset.arm = 1; de.textContent = 'Bấm lần nữa để xoá'; setTimeout(() => { if (de.isConnected) { delete de.dataset.arm; de.textContent = `Xoá ${cnt.err} phiếu lỗi`; } }, 2500); return; }
+      for (let i = results.length - 1; i >= 0; i--) if (results[i].status === 'err') results.splice(i, 1); if (resFilter === 'err') resFilter = 'all'; renderResults(); toast(`Đã xoá ${cnt.err} phiếu lỗi`); };
+    if (!results.some(resMatch) && resFilter !== 'all') { resFilter = 'all'; return renderResults(); }
+  }
   const ok = results.filter(r=>r.ok && r.sc?.key), avg = ok.length ? ok.reduce((s,r)=>s+r.sc.total,0)/ok.length : null;
   const miss = sm.size ? [...sm.keys()].filter(k => !results.some(r => r.ok && normSbd(r.dec.sbd) === k)).length : 0;
   $('#kpi').innerHTML = `<div><b>${results.length}</b><span class="muted small">phiếu</span></div><div><b>${results.filter(r=>r.status==='warn').length}</b><span class="muted small">cần xem lại</span></div><div><b>${results.filter(r=>r.status==='err').length}</b><span class="muted small">lỗi</span></div><div><b>${fmt(avg)}<span class="muted small" style="font-weight:500"> / ${fmt(maxScore())}</span></b><span class="muted small">điểm TB</span></div>` + (sm.size ? `<div><b>${miss}</b><span class="muted small">HS chưa có phiếu</span></div>` : '');
@@ -2164,8 +2192,8 @@ $('#m-made').onchange = e => { const r=results[cur]; r.madeOverride = e.target.v
 $('#m-close').onclick = () => $('#modal').classList.remove('on');
 $$('#m-view button').forEach(b => b.onclick = () => { curView = b.dataset.v; openReview(cur); });
 $('#modal').onclick = e => { if (e.target.id==='modal') $('#modal').classList.remove('on'); };
-$('#m-prev').onclick = () => cur>0 && openReview(cur-1);
-$('#m-nextb').onclick = () => cur<results.length-1 && openReview(cur+1);
+$('#m-prev').onclick = () => { for (let j=cur-1;j>=0;j--) if (resMatch(results[j])) return openReview(j); };
+$('#m-nextb').onclick = () => { for (let j=cur+1;j<results.length;j++) if (resMatch(results[j])) return openReview(j); };
 $('#m-del').onclick = () => { results.splice(cur,1); renderResults(); if (!results.length) $('#modal').classList.remove('on'); else openReview(Math.min(cur, results.length-1)); };
 document.addEventListener('keydown', e => { if (!$('#modal').classList.contains('on') || e.target.tagName==='INPUT') return;
   if (e.key==='Escape') $('#modal').classList.remove('on'); if (e.key==='ArrowRight') $('#m-nextb').click(); if (e.key==='ArrowLeft') $('#m-prev').click(); });
@@ -2261,8 +2289,11 @@ async function snap(){
   const v = $('#video'); if (!v.videoWidth || busy) return;
   busy = true; $('#camstat').textContent = 'Đang chấm…';
   try {
-    const src = await avgFrames(v, 4);
-    const r = await gradeSource(src, v.videoWidth, v.videoHeight, 'Camera ' + new Date().toLocaleTimeString('vi-VN'));
+    let src = null, sw = v.videoWidth, sh = v.videoHeight;
+    if (PAIR && window.ImageCapture && stream) { // điện thoại: chụp ảnh tĩnh độ phân giải đầy đủ (nét hơn khung hình video)
+      try { const bm = await createImageBitmap(await new ImageCapture(stream.getVideoTracks()[0]).takePhoto()); src = bm; sw = bm.width; sh = bm.height; } catch {} }
+    if (!src) src = await avgFrames(v, 4);
+    const r = await gradeSource(src, sw, sh, 'Camera ' + new Date().toLocaleTimeString('vi-VN'));
     if (r.ok) { cooldown = true; beep(true); toast(`SBD ${r.dec.sbd||'?'} · ${fmt(r.sc?.total)} điểm` + (r.status==='warn' ? ' · cần xem lại' : '')); }
     else { results.pop(); beep(false); snapBlock = Date.now() + 2500; toast('Chưa chấm được ảnh này — giữ camera gần hơn, đủ sáng rồi thử lại'); }
     renderResults();
@@ -2691,7 +2722,7 @@ const LINK = (() => {
   const rnd = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
   // MQTT 3.1.1 tối giản qua WebSocket: CONNECT, SUBSCRIBE, PUBLISH (QoS 0), PING; tự nối lại khi rớt mạng
   function mqtt(url, topics, onMsg, onState) {
-    let ws, ok = false, closed = false, ping, buf = new Uint8Array(0), pid = 1;
+    let ws, ok = false, closed = false, ping, buf = new Uint8Array(0), pid = 1, lastRx = 0, dog;
     const vl = n => { const o = []; do { let b = n % 128; n = Math.floor(n/128); if (n) b |= 128; o.push(b); } while (n); return o; };
     const str = s => { const b = te.encode(s); return [b.length >> 8, b.length & 255, ...b]; };
     const pkt = (h, head, payload) => { const body = head.length + (payload ? payload.length : 0), L = vl(body), u = new Uint8Array(1 + L.length + body);
@@ -2701,20 +2732,25 @@ const LINK = (() => {
     function open() {
       try { ws = new WebSocket(url, 'mqtt'); } catch { setTimeout(open, 5000); return; }
       ws.binaryType = 'arraybuffer';
-      ws.onopen = () => send(pkt(0x10, [...str('MQTT'), 4, 2, 0, 60, ...str('cp' + rnd())]));
-      ws.onmessage = e => { const d = new Uint8Array(e.data), nb = new Uint8Array(buf.length + d.length); nb.set(buf); nb.set(d, buf.length); buf = nb; parse(); };
-      ws.onclose = () => { const was = ok; ok = false; clearInterval(ping); if (was) onState(); if (!closed) setTimeout(open, 3000); };
+      ws.onopen = () => send(pkt(0x10, [...str('MQTT'), 4, 2, 0, 120, ...str('cp' + rnd())])); // giữ kết nối 120 s: tab chạy nền bị chậm hẹn giờ vẫn không rớt
+      ws.onmessage = e => { lastRx = Date.now(); const d = new Uint8Array(e.data), nb = new Uint8Array(buf.length + d.length); nb.set(buf); nb.set(d, buf.length); buf = nb; parse(); };
+      ws.onclose = () => { const was = ok; ok = false; clearInterval(ping); if (was) onState(); if (!closed) setTimeout(open, was ? 500 : 3000); };
       ws.onerror = () => {};
     }
     function parse() { for (;;) {
       if (buf.length < 2) return; let mul = 1, len = 0, i = 1, b;
       do { if (i >= buf.length) return; b = buf[i++]; len += (b & 127) * mul; mul *= 128; } while (b & 128);
       if (buf.length < i + len) return; const h = buf[0], body = buf.slice(i, i + len); buf = buf.slice(i + len);
-      if (h >> 4 === 2) { ok = true; topics.forEach(sub); clearInterval(ping); ping = setInterval(() => send(new Uint8Array([0xC0, 0])), 25000); onState(); }
+      if (h >> 4 === 2) { ok = true; topics.forEach(sub); clearInterval(ping); ping = setInterval(() => send(new Uint8Array([0xC0, 0])), 20000); onState(); }
       else if (h >> 4 === 3) { const tl = (body[0] << 8) | body[1], q = (h >> 1) & 3, off = 2 + tl + (q ? 2 : 0); onMsg(td.decode(body.slice(2, 2 + tl)), body.slice(off)); }
     } }
+    // kiểm tra "kết nối chết" (điện thoại tắt màn hình, mạng đổi Wi-Fi ↔ 4G…): lâu không nhận được gì thì nối lại ngay
+    const revive = () => { if (closed) return; try { ws.onclose = null; ws.close(); } catch {} ok = false; clearInterval(ping); onState(); open(); };
+    dog = setInterval(() => { if (ok && Date.now() - lastRx > 150000) revive(); }, 10000);
+    const vis = () => { if (document.visibilityState !== 'visible' || closed) return; if (!ok || Date.now() - lastRx > 25000) { if (ws && ws.readyState === 1) { send(new Uint8Array([0xC0, 0])); setTimeout(() => { if (Date.now() - lastRx > 4000) revive(); }, 3500); } } };
+    document.addEventListener('visibilitychange', vis); addEventListener('online', () => { if (!ok) revive(); });
     open();
-    return { url, get ok() { return ok; }, pub: (t, u8) => send(pkt(0x30, str(t), u8)), close() { closed = true; send(new Uint8Array([0xE0, 0])); try { ws.close(); } catch {} } };
+    return { url, get ok() { return ok; }, revive, pub: (t, u8) => send(pkt(0x30, str(t), u8)), close() { closed = true; clearInterval(dog); document.removeEventListener('visibilitychange', vis); send(new Uint8Array([0xE0, 0])); try { ws.close(); } catch {} } };
   }
   const L = { role: null, room: '', key: null, conns: [], seen: new Set(), parts: new Map(), peers: new Map(), outbox: new Map(), got: new Set(), cfgOk: false };
   async function mkKey(raw) { return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']); }
@@ -2749,8 +2785,9 @@ const LINK = (() => {
     $('#ln-qr').innerHTML = u ? QR.svg(u, 4, 3) : '<div class="small" style="width:200px;line-height:1.4;padding:8px;color:#b45309">Dán link app trên mạng (https) vào ô bên cạnh để tạo mã QR — xem hướng dẫn bên dưới.</div>';
     pcState();
   }
+  let pcWas = 0;
   function pcState() {
-    if (L.role !== 'pc') return; const n = L.conns.filter(c => c.ok).length;
+    if (L.role !== 'pc') return; const n = L.conns.filter(c => c.ok).length; if (n > pcWas && L.peers.size) send(cfgMsg()); pcWas = n;
     $('#ln-stat').innerHTML = n ? `<span class="badge b-ok">Sẵn sàng</span> Quét mã QR bằng camera điện thoại (hoặc app Zalo) để mở trang chấm trên điện thoại.` : `<span class="badge b-warn">Đang kết nối…</span> Máy này cần có internet.`;
     const now = Date.now(), ps = [...L.peers.values()].filter(p => now - p.last < 40000);
     $('#ln-peers').textContent = ps.length ? ps.map(p => `📱 ${p.dev} · đã nhận ${p.n} phiếu`).join(' · ') : 'Chưa có điện thoại nào nối vào.';
@@ -2785,26 +2822,32 @@ const LINK = (() => {
   let sentN = 0;
   function phState() {
     const n = L.conns.filter(c => c.ok).length, wait = [...L.outbox.values()].length;
-    $('#ph-stat').textContent = !n ? 'Đang kết nối mạng…' : !L.cfgOk ? 'Đang chờ máy tính gửi đáp án…' : `Bài: ${exam.title || '—'} · đã gửi ${sentN} phiếu` + (wait ? ` · đang gửi ${wait}` : '');
+    $('#ph-stat').textContent = !n ? '⚠ Mất kết nối — đang tự nối lại…' + (wait ? ` (${wait} phiếu chờ gửi, không mất)` : '') : !L.cfgOk ? 'Đang chờ máy tính gửi đáp án…' : `Bài: ${exam.title || '—'} · đã gửi ${sentN} phiếu` + (wait ? ` · đang gửi ${wait}` : '');
     $('#ph-shot').disabled = $('#cam-btn').disabled = !L.cfgOk;
   }
   function phMsg(o) {
     if (o.t === 'cfg') { exam = normExam(o.exam); studentsText = o.students || ''; _smT = null; const first = !L.cfgOk; L.cfgOk = true;
+      try { localStorage.setItem('omr.cfg.' + L.room, JSON.stringify({exam: o.exam, students: o.students || ''})); } catch {}
       rescoreAll(); phState(); if (first) toast('Đã nhận đáp án từ máy tính — bắt đầu chụp phiếu'); return; }
-    if (o.t === 'ack') { const r = L.outbox.get(o.rid); if (r) { L.outbox.delete(o.rid); r.res.sent = true; sentN++; renderResults(); phState(); } }
+    if (o.t === 'ack') { const r = L.outbox.get(o.rid); if (r) { L.outbox.delete(o.rid); if (r.res) r.res.sent = true; sentN++; saveOb(); renderResults(); phState(); } }
   }
   const dev = () => { const u = navigator.userAgent; return (u.match(/\(([^;)]+);[^;)]*?;?\s*([^;)]+)\)/) || [])[2]?.replace(/Build.*$/, '').trim().slice(0, 24) || (/iPhone/.test(u) ? 'iPhone' : 'Điện thoại'); };
   L.queue = async res => {
     const r = {marked: res.marked, unsure: res.unsure, auto: res.auto, missCells: res.missCells, crop: res.crop, idpT: res.idpT, mis: res.mis, evb: res.evb, evh: res.evh, evt: res.evt};
     const ev = res.ev ? b64(new Uint8Array(await res.ev.arrayBuffer())) : null, id = rnd();
-    L.outbox.set(id, {msg: {t:'res', rid: id, pid: L.pid, name: '📱 ' + res.name, r, ev}, res, tries: 0}); flush(); phState();
+    L.outbox.set(id, {msg: {t:'res', rid: id, pid: L.pid, name: '📱 ' + res.name, r, ev}, res, tries: 0}); saveOb(); flush(); phState();
   };
-  function flush() { for (const [id, o] of L.outbox) { if (o.tries > 60) { L.outbox.delete(id); continue; } o.tries++; send(o.msg); } }
+  function flush() { for (const [id, o] of L.outbox) { o.tries++; send(o.msg); } }
+  const saveOb = () => IDB.set('ob:' + L.room, [...L.outbox.values()].map(o => o.msg)).catch?.(() => {});
   async function phone(pair) {
     const [room, k] = pair.split('.'); if (!room || !k || !crypto.subtle) { toast('Mã ghép nối không hợp lệ hoặc trình duyệt không hỗ trợ'); return; }
     document.body.classList.add('phone'); L.role = 'phone'; L.room = room; L.key = await mkKey(ub64u(k)); L.pid = rnd();
     results.length = 0; renderResults(); $$('nav button').forEach(b => { if (b.dataset.tab === 't-grade') b.click(); });
     connect(); phState();
+    try { const c = JSON.parse(localStorage.getItem('omr.cfg.' + room) || 'null'); if (c) { exam = normExam(c.exam); studentsText = c.students; _smT = null; L.cfgOk = true; rescoreAll(); phState(); } } catch {} // đáp án đã nhận lần trước: mất mạng vẫn chấm được
+    try { const old = await IDB.get('ob:' + room); if (old && old.length) { old.forEach(m => L.outbox.set(m.rid, {msg: m, res: null, tries: 0})); toast(`Đang gửi lại ${old.length} phiếu chưa gửi xong`); } } catch {}
+    const wake = async () => { try { if (document.visibilityState === 'visible' && navigator.wakeLock) L.wl = await navigator.wakeLock.request('screen'); } catch {} };
+    wake(); document.addEventListener('visibilitychange', () => { wake(); if (document.visibilityState === 'visible') { send({t:'hello', pid: L.pid, dev: dev()}); flush(); } });
     setInterval(() => { if (L.conns.some(c => c.ok)) send({t: L.cfgOk ? 'ping' : 'hello', pid: L.pid, dev: dev(), cfg: L.cfgOk}); flush(); phState(); }, 4000);
     setTimeout(() => send({t:'hello', pid: L.pid, dev: dev()}), 1500);
   }
